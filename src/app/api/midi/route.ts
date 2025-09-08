@@ -1,58 +1,97 @@
-import fs from 'fs'
-import { SongMetadata } from '@/types'
-import type { NextRequest } from 'next/server'
+// src/app/api/midi/route.ts
+import fs from 'fs';
+import path from 'path';
+import { SongMetadata } from '@/types';
+import type { NextRequest } from 'next/server';
+import { NextResponse } from 'next/server';
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-const songManifest = require('@/manifest.json')
-const map: Map<string, SongMetadata> = new Map(songManifest.map((s: SongMetadata) => [s.id, s]))
+
+
+const songManifest: SongMetadata[] = require('@/manifest.json');
+const map: Map<string, SongMetadata> = new Map(songManifest.map((s: SongMetadata) => [s.id, s]));
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url)
-  const { id, source } = Object.fromEntries(searchParams)
-  const supportedSources = new Set(['builtin', 'midishare'])
+  const { searchParams } = new URL(request.url);
+  const { id, source } = Object.fromEntries(searchParams);
+  const supportedSources = new Set(['builtin', 'midishare']);
 
-  if (!id || !source) {
-    return new Response('Must provide both a a source and an id.', { status: 400 })
-  } else if (Array.isArray(id) || Array.isArray(source)) {
-    return new Response('Must only provide a single id and source.', { status: 400 })
-  } else if (!supportedSources.has(source)) {
-    return new Response(`Received invalid source: ${source}`, { status: 400 })
+  // Validation des paramètres
+  if (!id || !source || Array.isArray(id) || Array.isArray(source) || !supportedSources.has(source)) {
+    return NextResponse.json({ error: 'Invalid parameters' }, { status: 400 });
   }
 
+  // Gestion Midishare
   if (source === 'midishare') {
-    // TODO(samouri): determine why the former URL is blocked by CF.
-    // stream = await get(`https://midishare.dev/api/midi?id=${id}`)
-    // const response = await fetch(`https://midishare.dev/api/midi?id=${id}`)
-    // stream = dStream.fromWeb(response.body!)
-    return fetch(`https://assets.midishare.dev/scores/${id}/${id}.mid`)
+    try {
+      const response = await fetch(`https://assets.midishare.dev/scores/${id}/${id}.mid`);
+      if (!response.ok) throw new Error(response.statusText);
+
+      const buffer = await response.arrayBuffer();
+      return new NextResponse(buffer, {
+        headers: {
+          'Content-Type': 'audio/midi',
+          'Content-Disposition': `attachment; filename="${id}.mid"`,
+        },
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
   }
 
-  // else source === builtin
-  const path = map.get(id)?.file
-  if (!path) {
-    return new Response(`Could not find midi with id: "${id}"`, { status: 404 })
+  // Gestion des fichiers locaux (builtin)
+  const song = map.get(id);
+  if (!song?.file) {
+    return NextResponse.json({ error: 'MIDI not found' }, { status: 404 });
   }
 
-  // TODO: can we simplify this now that Next.js supports https in local dev w/ 14.1?
+  // Sécurise le chemin
+  const safePath = path.join('public', path.normalize(song.file).replace(/^(\.\.(\/|\\|$))+/, ''));
+  if (!safePath.startsWith('public/')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
-  // In development we have access to the filesystem but can't hit localhost with https.
-  // When deployed we don't have access to fs, but can proxy to the hosted /public.
+  // Développement : lit le fichier localement
   if (process.env.NODE_ENV === 'development') {
-    const body = fs.readFileSync(`public/${path}`)
-    const basename = path.substring(path.lastIndexOf('/') + 1)
-    return new Response(body, {
-      headers: {
-        'Content-Type': 'audio/midi',
-        'Content-Disposition': `attachment; filename="${basename}"`,
-      },
-    })
-  } else {
-    const url =
-      process.env.VERCEL_ENV === 'production'
-        ? process.env.VERCEL_PROJECT_PRODUCTION_URL
-        : process.env.VERCEL_URL
+    try {
+      const body = fs.readFileSync(safePath);
+      return new NextResponse(body, {
+        headers: {
+          'Content-Type': 'audio/midi',
+          'Content-Disposition': `attachment; filename="${path.basename(safePath)}"`,
+        },
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
+  }
 
-    console.log(Object.keys(process.env), process.env)
-    console.log(`Requesting URL: https://${url}/${path}`)
-    return fetch(`https://${url}/${path}`)
+  // Production : utilise fetch standard
+  else {
+    try {
+      const host = process.env.VERCEL_URL || 'localhost:3000';
+      const fileUrl = `https://${host}/${song.file}`;
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error(response.statusText);
+
+      const buffer = await response.arrayBuffer();
+      return new NextResponse(buffer, {
+        headers: {
+          'Content-Type': 'audio/midi',
+          'Content-Disposition': `attachment; filename="${path.basename(song.file)}"`,
+        },
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : 'Unknown error' },
+        { status: 500 }
+      );
+    }
   }
 }
