@@ -38,8 +38,9 @@
     "next": "15.2.3",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "react-feather": "2.0.10",
-    "tailwind-merge": "3.0.2"
+    "react-feather": "^2.0.10",
+    "tailwind-merge": "3.0.2",
+    "tone": "^15.1.22"
   },
   "scripts": {
     "start": "next start",
