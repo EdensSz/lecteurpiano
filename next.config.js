@@ -1,8 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Désactive les warnings ESLint en développement si nécessaire
+  experimental: {
+    serverComponentsExternalPackages: ['node-fetch'],
+  },
+  // Désactive les warnings ESLint si nécessaire
   eslint: {
-    ignoreDuringBuilds: process.env.NODE_ENV === 'development',
+    ignoreDuringBuilds: process.env.NODE_ENV === 'production',
   },
 };
 
