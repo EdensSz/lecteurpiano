@@ -11,6 +11,7 @@ import RecordingModal from '@/app/freeplay/components/RecordingModal'
 import TopBar from '@/app/freeplay/components/TopBar'
 import FreePlayer from '@/app/freeplay/utils/freePlayer'
 import * as Tone from 'tone'
+import { useMidiReceiver, loadMidiFromData } from '../hooks/useMidiReceiver'
 
 // ===================== Player simple + gestion de boucle =====================
 class SimpleMidiPlayer {
@@ -202,6 +203,77 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const progressBarRef = useRef<HTMLDivElement>(null)
 
+  // ============================= Réception MIDI depuis Bubble =============================
+  
+  // Fonction commune pour charger un fichier MIDI (utilisée par upload ET réception Bubble)
+  const loadMidiFile = async (file: File) => {
+    try {
+      const { Midi } = await import('@tonejs/midi')
+      const arrayBuffer = await file.arrayBuffer()
+      const midi = new Midi(arrayBuffer)
+
+      const song: Song = {
+        bpms: [{ time: 0, bpm: 120 }],
+        tracks: { 1: { instrument: 'piano' } },
+        measures: [],
+        notes: [],
+        duration: midi.duration,
+        items: [],
+        keySignature: 'C',
+      }
+
+      midi.tracks.forEach((track) => {
+        track.notes.forEach(note => {
+          song.notes.push({
+            midiNote: note.midi,
+            velocity: Math.round(note.velocity * 127),
+            type: 'note',
+            track: 1,
+            time: note.time,
+            duration: note.duration,
+            measure: 0,
+          })
+        })
+      })
+
+      song.notes.sort((a, b) => a.time - b.time)
+      song.items = song.notes
+
+      setCurrentSong(song)
+      setDuration(song.duration)
+      midiPlayer.setSong(song)
+      setCurrentTime(0)
+      
+      // Arrêter la lecture en cours et reset
+      setIsPlaying(false)
+      midiPlayer.stop()
+      
+      console.log('MIDI loaded:', song.notes.length, 'notes, duration:', song.duration, 'seconds')
+      
+    } catch (error) {
+      console.error('Error loading MIDI:', error)
+      alert('Error loading MIDI file: ' + (error as Error).message)
+    }
+  }
+
+  // Handler pour les fichiers MIDI reçus depuis Bubble
+  const handleMidiFromBubble = async (midiData: any) => {
+    console.log('Nouveau fichier MIDI reçu depuis Bubble:', midiData)
+    
+    try {
+      const file = await loadMidiFromData(midiData.fileData, midiData.fileName)
+      if (file) {
+        await loadMidiFile(file)
+        console.log(`🎵 Nouveau morceau chargé depuis Bubble: ${midiData.fileName}`)
+      }
+    } catch (error) {
+      console.error('Erreur lors du chargement du MIDI depuis Bubble:', error)
+    }
+  }
+
+  // Activer l'écoute des fichiers MIDI depuis Bubble
+  useMidiReceiver(handleMidiFromBubble)
+
   // =========================== Effets principaux ===========================
   // Rafraîchit l'horloge d'affichage
   useEffect(() => {
@@ -241,7 +313,7 @@ export default function Home() {
     setLoopEnd(defaultEnd)
     midiPlayer.setLoop(defaultStart, defaultEnd)
     midiPlayer.enableLoop(loopEnabled)
-  }, [currentSong, midiPlayer]) // loopEnabled sync plus bas
+  }, [currentSong, midiPlayer])
 
   // Sync bornes player quand l'UI change
   useEffect(() => {
@@ -283,48 +355,8 @@ export default function Home() {
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
-
-    try {
-      const { Midi } = await import('@tonejs/midi')
-      const arrayBuffer = await file.arrayBuffer()
-      const midi = new Midi(arrayBuffer)
-
-      const song: Song = {
-        bpms: [{ time: 0, bpm: 120 }],
-        tracks: { 1: { instrument: 'piano' } },
-        measures: [],
-        notes: [],
-        duration: midi.duration,
-        items: [],
-        keySignature: 'C',
-      }
-
-      midi.tracks.forEach((track) => {
-        track.notes.forEach(note => {
-          song.notes.push({
-            midiNote: note.midi,
-            velocity: Math.round(note.velocity * 127),
-            type: 'note',
-            track: 1,
-            time: note.time,
-            duration: note.duration,
-            measure: 0,
-          })
-        })
-      })
-
-      song.notes.sort((a, b) => a.time - b.time)
-      song.items = song.notes
-
-      setCurrentSong(song)
-      setDuration(song.duration)
-      midiPlayer.setSong(song)
-      setCurrentTime(0)
-      console.log('MIDI loaded:', song.notes.length, 'notes')
-    } catch (error) {
-      console.error('Error loading MIDI:', error)
-      alert('Error loading MIDI file')
-    }
+    
+    await loadMidiFile(file)
   }
 
   // ============================== Transport ==============================
@@ -442,12 +474,9 @@ export default function Home() {
       if (draggingHandle === 'start') {
         const newStart = clamp(t, 0, loopEnd - MIN_LOOP_SEC)
         setLoopStart(newStart)
-        // Option: snap du playhead si avant la nouvelle borne
-        // if (currentTime < newStart) midiPlayer.seekTo(newStart)
       } else {
         const newEnd = clamp(t, loopStart + MIN_LOOP_SEC, duration)
         setLoopEnd(newEnd)
-        // if (currentTime > newEnd) midiPlayer.seekTo(loopStart)
       }
     }
     const onUp = () => setDraggingHandle(null)
